@@ -2,17 +2,20 @@ extends Node2D
 
 ## リールが絵柄を切り替える間隔（回転中）
 const REEL_TICK := 0.06
-## リールごとの止まるタイミングのずれ（1番目→2番目→3番目の順に止まる）
-const REEL_STAGGER := 0.35
-## 一番早く止まるリールの回転時間
-const REEL_SPIN_TIME := 0.7
+## STOPを押し忘れても、この秒数たったら自動で止まる保険
+const AUTO_STOP_TIME := 5.0
 
 var spins := 0
 var wins := 0
 var spinning := false
+# 各リールが今も回転中かどうか
+var reel_spinning: Array[bool] = [false, false, false]
 
 @onready var reels: Array[SlotSymbol] = [
 	$HUD/Reels/Reel0, $HUD/Reels/Reel1, $HUD/Reels/Reel2,
+]
+@onready var stop_buttons: Array[Button] = [
+	$HUD/StopButton0, $HUD/StopButton1, $HUD/StopButton2,
 ]
 @onready var spin_button: Button = $HUD/SpinButton
 @onready var result_label: Label = $HUD/ResultLabel
@@ -22,6 +25,9 @@ var spinning := false
 
 func _ready() -> void:
 	spin_button.pressed.connect(_on_spin_pressed)
+	for i in stop_buttons.size():
+		stop_buttons[i].pressed.connect(_on_stop_pressed.bind(i))
+		stop_buttons[i].visible = false
 	for reel in reels:
 		reel.show_symbol(randi() % SlotSymbol.SYMBOLS.size())
 	_update_hud()
@@ -31,33 +37,51 @@ func _on_spin_pressed() -> void:
 	if spinning:
 		return
 	spinning = true
-	spin_button.disabled = true
+	spin_button.visible = false
 	result_label.text = ""
 	spins += 1
 	_update_hud()
 
-	var final_symbols: Array[int] = []
 	for i in reels.size():
-		final_symbols.append(randi() % SlotSymbol.SYMBOLS.size())
-	for i in reels.size():
-		_spin_reel(reels[i], REEL_SPIN_TIME + i * REEL_STAGGER, final_symbols[i])
-
-	var total_time := REEL_SPIN_TIME + (reels.size() - 1) * REEL_STAGGER + 0.05
-	await get_tree().create_timer(total_time).timeout
-	_resolve_result(final_symbols)
-	spinning = false
-	spin_button.disabled = false
+		reel_spinning[i] = true
+		stop_buttons[i].disabled = false
+		stop_buttons[i].visible = true
+		_spin_reel(i)
 
 
-# 1本のリールを回す：一定時間はランダムに絵柄を切り替え続け、最後に final_index で止める
-func _spin_reel(reel: SlotSymbol, duration: float, final_index: int) -> void:
-	var t := 0.0
-	while t < duration:
+# 目押し：タップされたリールを、今表示中の絵柄のまま止める
+func _on_stop_pressed(i: int) -> void:
+	reel_spinning[i] = false
+	stop_buttons[i].disabled = true
+
+
+# 1本のリールを回し続ける。reel_spinning[i] が false になるか、
+# AUTO_STOP_TIME 秒たったら、その時点の絵柄で止まる
+func _spin_reel(i: int) -> void:
+	var reel := reels[i]
+	var elapsed := 0.0
+	while reel_spinning[i] and elapsed < AUTO_STOP_TIME:
 		reel.show_symbol(randi() % SlotSymbol.SYMBOLS.size())
 		await get_tree().create_timer(REEL_TICK).timeout
-		t += REEL_TICK
-	reel.show_symbol(final_index)
+		elapsed += REEL_TICK
+	reel_spinning[i] = false
+	stop_buttons[i].disabled = true
 	reel.bounce()
+	_check_all_stopped()
+
+
+func _check_all_stopped() -> void:
+	for is_spinning in reel_spinning:
+		if is_spinning:
+			return
+	for b in stop_buttons:
+		b.visible = false
+	var symbols: Array[int] = []
+	for reel in reels:
+		symbols.append(reel.symbol_index)
+	_resolve_result(symbols)
+	spinning = false
+	spin_button.visible = true
 
 
 func _resolve_result(symbols: Array[int]) -> void:
